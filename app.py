@@ -6,13 +6,13 @@ import re
 # ==========================================
 # 1. 页面配置
 # ==========================================
-st.set_page_config(layout="wide", page_title="Coupang 利润核算 (广告组匹配版)")
-st.title("📊 最终定稿：利润核算 (广告组名称强行匹配)")
+st.set_page_config(layout="wide", page_title="Coupang 利润核算 (双重提取版)")
+st.title("📊 最终定稿：利润核算 (广告组+活动名双重匹配)")
 st.markdown("""
-### 🎯 核心逻辑：
-* **广告费匹配**：**仅使用** 广告表中的【广告组名称】列。
-* **算法**：提取广告组名中的 `Cxxxx` 编码 -> 汇总金额 -> 乘以 1.1 -> 匹配给产品。
-* **注意**：不再使用 SKU ID 进行广告匹配，确保逻辑单一。
+### 🎯 广告匹配逻辑：
+1.  **首选**：从 **G列 [广告组名称]** 中提取 `Cxxxx` 编码。
+2.  **兜底**：如果提取失败，从 **F列 [广告活动名]** 中提取 `Cxxxx` 编码。
+3.  **计算**：提取到的编码对应的花费汇总 x 1.1 -> 计入产品成本。
 """)
 
 # --- 列号配置 ---
@@ -23,9 +23,10 @@ IDX_M_PROFIT = 10   # Master表 K列: 单品毛利
 IDX_S_ID     = 0    # Sales表 A列: 选项ID
 IDX_S_QTY    = 8    # Sales表 I列: 购买数量
 
-# 广告表配置 (关键)
-IDX_A_GROUP  = 6    # Ads表 G列: 广告组 (用户指名为D列，但CSV实际为G列，此处认准广告组)
-IDX_A_SPEND  = 15   # Ads表 P列: 广告费
+# 广告表配置 (关键修改)
+IDX_A_CAMPAIGN = 5  # Ads表 F列: 广告活动名 (兜底来源)
+IDX_A_GROUP    = 6  # Ads表 G列: 广告组 (首选来源)
+IDX_A_SPEND    = 15 # Ads表 P列: 广告费
 # -----------------
 
 # ==========================================
@@ -51,6 +52,7 @@ def extract_code_from_text(text):
     # 从文本中提取 C+数字 的编码
     if pd.isna(text): return None
     # 提取 C开头后跟数字的模式 (例如 C053, C1024)
+    # 忽略大小写，统一转大写
     match = re.search(r'([Cc]\d+)', str(text))
     if match: return match.group(1).upper()
     return None
@@ -74,7 +76,7 @@ def get_col_width(series):
 # ==========================================
 if file_master and files_sales and files_ads:
     st.divider()
-    if st.button("🚀 开始计算 (纯广告组匹配)", type="primary", use_container_width=True):
+    if st.button("🚀 开始计算 (双重提取模式)", type="primary", use_container_width=True):
         try:
             with st.status("🔄 正在计算...", expanded=True):
                 
@@ -103,30 +105,35 @@ if file_master and files_sales and files_ads:
                 sales_agg.rename(columns={'销量': 'O列_合并销量'}, inplace=True)
 
                 # --------------------------------------------
-                # Step 3: 广告表 (Ads) - 纯广告组匹配
+                # Step 3: 广告表 (Ads) - 双重提取逻辑
                 # --------------------------------------------
-                st.write(f"3. 合并 {len(files_ads)} 个广告表 (仅使用广告组名匹配)...")
+                st.write(f"3. 合并 {len(files_ads)} 个广告表并执行匹配...")
                 ads_list = [read_file_strict(f) for f in files_ads]
                 df_ads_all = pd.concat(ads_list, ignore_index=True)
 
                 # A. 费用 x 1.1
                 df_ads_all['含税广告费'] = clean_num(df_ads_all.iloc[:, IDX_A_SPEND]) * 1.1
                 
-                # B. 提取编码 (从 IDX_A_GROUP 即第6列/G列)
-                # 注意：这里我们强制只从广告组列提取，不看 ID，也不看广告活动名
-                df_ads_all['_MATCH_CODE'] = df_ads_all.iloc[:, IDX_A_GROUP].apply(extract_code_from_text)
+                # B. 首选：从广告组 (G列) 提取
+                df_ads_all['Code_Group'] = df_ads_all.iloc[:, IDX_A_GROUP].apply(extract_code_from_text)
+                
+                # C. 兜底：从广告活动名 (F列) 提取
+                df_ads_all['Code_Campaign'] = df_ads_all.iloc[:, IDX_A_CAMPAIGN].apply(extract_code_from_text)
 
-                # C. 过滤掉提取失败的 (无 Cxxxx 的广告费将不计入产品成本)
+                # D. 融合：优先用 Group，没有则用 Campaign
+                df_ads_all['_MATCH_CODE'] = df_ads_all['Code_Group'].fillna(df_ads_all['Code_Campaign'])
+
+                # E. 过滤掉无主广告
                 valid_ads = df_ads_all.dropna(subset=['_MATCH_CODE'])
                 
-                # D. 聚合
+                # F. 聚合
                 ads_agg = valid_ads.groupby('_MATCH_CODE')['含税广告费'].sum().reset_index()
                 ads_agg.rename(columns={'含税广告费': 'R列_产品总广告费'}, inplace=True)
                 
-                # 调试信息：显示多少钱被成功匹配了
-                total_money = df_ads_all['含税广告费'].sum()
-                matched_money = ads_agg['R列_产品总广告费'].sum()
-                st.info(f"💰 广告费统计：总花费 {total_money:,.0f}，成功匹配归集 {matched_money:,.0f} (覆盖率 {matched_money/total_money:.1%})")
+                # 统计信息
+                total = df_ads_all['含税广告费'].sum()
+                matched = ads_agg['R列_产品总广告费'].sum()
+                st.info(f"💰 广告匹配：总额 {total:,.0f} | 匹配成功 {matched:,.0f} (覆盖率 {matched/total:.1%})")
 
                 # --------------------------------------------
                 # Step 4: 最终关联
@@ -138,31 +145,31 @@ if file_master and files_sales and files_ads:
                 # 算单品毛利
                 df_final['P列_SKU总毛利'] = df_final['O列_合并销量'] * df_final['_VAL_PROFIT']
                 
-                # 算产品总利润 (Q列)
+                # 算产品总利润
                 df_final['Q列_产品总利润'] = df_final.groupby('_MATCH_CODE', sort=False)['P列_SKU总毛利'].transform('sum')
                 
-                # Master + Ads (按产品Code关联)
+                # Master + Ads
                 df_final = pd.merge(df_final, ads_agg, on='_MATCH_CODE', how='left', sort=False)
                 df_final['R列_产品总广告费'] = df_final['R列_产品总广告费'].fillna(0)
                 
-                # 算最终净利 (S列)
+                # 算净利
                 df_final['S列_最终净利润'] = df_final['Q列_产品总利润'] - df_final['R列_产品总广告费']
 
                 # --------------------------------------------
                 # Step 5: 输出 (Sheet1 + Sheet2)
                 # --------------------------------------------
-                # 提取 Sheet2 数据 (A, Q, R, S)
+                # 提取 Sheet2 数据
                 df_sheet2 = df_final[[col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润']].copy()
                 df_sheet2 = df_sheet2.drop_duplicates(subset=[col_code_name], keep='first')
                 
-                # 清理辅助列
-                cols_to_drop = [c for c in df_final.columns if c.startswith('_')]
+                # 清理
+                cols_to_drop = [c for c in df_final.columns if c.startswith('_') or c.startswith('Code_')]
                 df_final.drop(columns=cols_to_drop, inplace=True)
 
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                     
-                    # === Sheet 1: 利润分析 ===
+                    # === Sheet 1 ===
                     df_final.to_excel(writer, index=False, sheet_name='利润分析')
                     wb = writer.book
                     ws = writer.sheets['利润分析']
@@ -199,7 +206,7 @@ if file_master and files_sales and files_ads:
                             elif num_val < 0: ws.write(excel_row, col_profit_idx, val, fmt_s_loss)
                             else: ws.write(excel_row, col_profit_idx, val, fmt_row_grey if is_grey else fmt_row_white)
 
-                    # === Sheet 2: 业务报表 ===
+                    # === Sheet 2 ===
                     df_sheet2.to_excel(writer, index=False, sheet_name='业务报表')
                     ws2 = writer.sheets['业务报表']
                     fmt_header2 = wb.add_format({'font_name': 'Microsoft YaHei', 'bold': True, 'font_size': 12, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1, 'align': 'center'})
@@ -212,8 +219,8 @@ if file_master and files_sales and files_ads:
                     (max_r2, max_c2) = df_sheet2.shape
                     ws2.conditional_format(1, 3, max_r2, 3, {'type': 'data_bar', 'bar_color': '#63C384', 'bar_negative_color': '#FF0000', 'bar_axis_position': 'middle'})
 
-            st.success("✅ 计算完成！已按照【广告组名称】进行唯一匹配。")
-            st.download_button("📥 下载报表", output.getvalue(), "Coupang_AdGroup_Match_Report.xlsx")
+            st.success("✅ 升级完成！已应用【广告组为主，活动名为辅】的匹配策略。")
+            st.download_button("📥 下载报表", output.getvalue(), "Coupang_Double_Extract_Report.xlsx")
 
         except Exception as e:
             st.error(f"❌ 错误: {e}")
