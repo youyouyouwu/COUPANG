@@ -6,13 +6,12 @@ import re
 # ==========================================
 # 1. 页面配置
 # ==========================================
-st.set_page_config(layout="wide", page_title="Coupang 利润核算 (双重提取版)")
-st.title("📊 最终定稿：利润核算 (广告组+活动名双重匹配)")
+st.set_page_config(layout="wide", page_title="Coupang 利润核算 (支持宏文件)")
+st.title("📊 最终定稿：利润核算 (支持上传带宏文件)")
 st.markdown("""
-### 🎯 广告匹配逻辑：
-1.  **首选**：从 **G列 [广告组名称]** 中提取 `Cxxxx` 编码。
-2.  **兜底**：如果提取失败，从 **F列 [广告活动名]** 中提取 `Cxxxx` 编码。
-3.  **计算**：提取到的编码对应的花费汇总 x 1.1 -> 计入产品成本。
+### 🛡️ 升级说明：
+* **文件支持**：现已支持上传 `.xlsm` (带宏的 Excel 文件)。
+* **逻辑保持**：继续使用【广告组 G列 + 广告活动 F列】的双重提取逻辑。
 """)
 
 # --- 列号配置 ---
@@ -23,21 +22,23 @@ IDX_M_PROFIT = 10   # Master表 K列: 单品毛利
 IDX_S_ID     = 0    # Sales表 A列: 选项ID
 IDX_S_QTY    = 8    # Sales表 I列: 购买数量
 
-# 广告表配置 (关键修改)
-IDX_A_CAMPAIGN = 5  # Ads表 F列: 广告活动名 (兜底来源)
-IDX_A_GROUP    = 6  # Ads表 G列: 广告组 (首选来源)
+# 广告表配置
+IDX_A_CAMPAIGN = 5  # Ads表 F列: 广告活动名 (兜底)
+IDX_A_GROUP    = 6  # Ads表 G列: 广告组 (首选)
 IDX_A_SPEND    = 15 # Ads表 P列: 广告费
 # -----------------
 
 # ==========================================
-# 2. 上传区域
+# 2. 上传区域 (修改点：新增 'xlsm')
 # ==========================================
 with st.sidebar:
     st.header("📂 文件上传")
     st.info("基础表 1 个，销售/广告表支持多个")
-    file_master = st.file_uploader("1. 基础信息表 (Master)", type=['csv', 'xlsx'])
-    files_sales = st.file_uploader("2. 销售表 (Sales - 多选)", type=['csv', 'xlsx'], accept_multiple_files=True)
-    files_ads = st.file_uploader("3. 广告表 (Ads - 多选)", type=['csv', 'xlsx'], accept_multiple_files=True)
+    
+    # 修改点：type列表里加入了 'xlsm'
+    file_master = st.file_uploader("1. 基础信息表 (Master)", type=['csv', 'xlsx', 'xlsm'])
+    files_sales = st.file_uploader("2. 销售表 (Sales - 多选)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
+    files_ads = st.file_uploader("3. 广告表 (Ads - 多选)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
 
 # ==========================================
 # 3. 清洗工具
@@ -49,10 +50,7 @@ def clean_num(series):
     return pd.to_numeric(series, errors='coerce').fillna(0)
 
 def extract_code_from_text(text):
-    # 从文本中提取 C+数字 的编码
     if pd.isna(text): return None
-    # 提取 C开头后跟数字的模式 (例如 C053, C1024)
-    # 忽略大小写，统一转大写
     match = re.search(r'([Cc]\d+)', str(text))
     if match: return match.group(1).upper()
     return None
@@ -60,10 +58,12 @@ def extract_code_from_text(text):
 def read_file_strict(file):
     try:
         file.seek(0)
+        # 兼容 .xlsm 的读取
         if file.name.endswith('.csv'):
             return pd.read_csv(file, dtype=str)
         else:
-            return pd.read_excel(file, dtype=str)
+            # openpyxl 引擎完全支持读 xlsm 的数据
+            return pd.read_excel(file, dtype=str, engine='openpyxl') 
     except:
         file.seek(0)
         return pd.read_csv(file, dtype=str, encoding='gbk')
@@ -76,7 +76,7 @@ def get_col_width(series):
 # ==========================================
 if file_master and files_sales and files_ads:
     st.divider()
-    if st.button("🚀 开始计算 (双重提取模式)", type="primary", use_container_width=True):
+    if st.button("🚀 开始计算 (兼容宏文件)", type="primary", use_container_width=True):
         try:
             with st.status("🔄 正在计算...", expanded=True):
                 
@@ -107,7 +107,7 @@ if file_master and files_sales and files_ads:
                 # --------------------------------------------
                 # Step 3: 广告表 (Ads) - 双重提取逻辑
                 # --------------------------------------------
-                st.write(f"3. 合并 {len(files_ads)} 个广告表并执行匹配...")
+                st.write(f"3. 合并 {len(files_ads)} 个广告表...")
                 ads_list = [read_file_strict(f) for f in files_ads]
                 df_ads_all = pd.concat(ads_list, ignore_index=True)
 
@@ -120,7 +120,7 @@ if file_master and files_sales and files_ads:
                 # C. 兜底：从广告活动名 (F列) 提取
                 df_ads_all['Code_Campaign'] = df_ads_all.iloc[:, IDX_A_CAMPAIGN].apply(extract_code_from_text)
 
-                # D. 融合：优先用 Group，没有则用 Campaign
+                # D. 融合：优先用 Group，没有则 Campaign
                 df_ads_all['_MATCH_CODE'] = df_ads_all['Code_Group'].fillna(df_ads_all['Code_Campaign'])
 
                 # E. 过滤掉无主广告
@@ -219,8 +219,8 @@ if file_master and files_sales and files_ads:
                     (max_r2, max_c2) = df_sheet2.shape
                     ws2.conditional_format(1, 3, max_r2, 3, {'type': 'data_bar', 'bar_color': '#63C384', 'bar_negative_color': '#FF0000', 'bar_axis_position': 'middle'})
 
-            st.success("✅ 升级完成！已应用【广告组为主，活动名为辅】的匹配策略。")
-            st.download_button("📥 下载报表", output.getvalue(), "Coupang_Double_Extract_Report.xlsx")
+            st.success("✅ 支持宏文件！计算完成。")
+            st.download_button("📥 下载报表", output.getvalue(), "Coupang_Report_Macro_Support.xlsx")
 
         except Exception as e:
             st.error(f"❌ 错误: {e}")
