@@ -4,43 +4,39 @@ import io
 import re
 
 # ==========================================
-# 1. 页面配置
+# 1. 页面配置 (开启宽屏模式)
 # ==========================================
-st.set_page_config(layout="wide", page_title="Coupang 利润核算 (网页看板版)")
-st.title("📊 最终定稿：利润核算 (网页预览 + 下载)")
-st.markdown("""
-### 🎯 功能升级：
-* **网页看板**：计算完成后，直接在网页下方预览“明细表”和“业务报表”。
-* **双重匹配**：G列广告组为主，F列活动名为辅。
-* **数据清洗**：自动去除千分位逗号，修复数值异常。
-""")
+st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro")
+
+st.title("📊 Coupang 经营分析看板")
+st.markdown("### 🚀 核心功能：多店铺数据合并 + 智能广告匹配 + 财务看板")
 
 # --- 列号配置 ---
-IDX_M_CODE   = 0    # Master表 A列: 内部编码
-IDX_M_SKU    = 3    # Master表 D列: SKU ID
-IDX_M_PROFIT = 10   # Master表 K列: 单品毛利
+IDX_M_CODE   = 0    # Master A列
+IDX_M_SKU    = 3    # Master D列
+IDX_M_PROFIT = 10   # Master K列
 
-IDX_S_ID     = 0    # Sales表 A列: 选项ID
-IDX_S_QTY    = 8    # Sales表 I列: 购买数量
+IDX_S_ID     = 0    # Sales A列
+IDX_S_QTY    = 8    # Sales I列
 
-# 广告表配置
-IDX_A_CAMPAIGN = 5  # Ads表 F列: 广告活动名 (兜底)
-IDX_A_GROUP    = 6  # Ads表 G列: 广告组 (首选)
-IDX_A_SPEND    = 15 # Ads表 P列: 广告费
+IDX_A_CAMPAIGN = 5  # Ads F列 (兜底)
+IDX_A_GROUP    = 6  # Ads G列 (首选)
+IDX_A_SPEND    = 15 # Ads P列
 # -----------------
 
 # ==========================================
-# 2. 上传区域
+# 2. 侧边栏上传
 # ==========================================
 with st.sidebar:
-    st.header("📂 文件上传")
-    st.info("基础表 1 个，销售/广告表支持多个")
-    file_master = st.file_uploader("1. 基础信息表 (Master)", type=['csv', 'xlsx', 'xlsm'])
-    files_sales = st.file_uploader("2. 销售表 (Sales - 多选)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
-    files_ads = st.file_uploader("3. 广告表 (Ads - 多选)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
+    st.header("📂 数据源上传")
+    st.info("💡 提示：支持 .xlsx, .xlsm, .csv")
+    
+    file_master = st.file_uploader("1. 基础信息表 (Master - 单文件)", type=['csv', 'xlsx', 'xlsm'])
+    files_sales = st.file_uploader("2. 销售表 (Sales - 多文件)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
+    files_ads = st.file_uploader("3. 广告表 (Ads - 多文件)", type=['csv', 'xlsx', 'xlsm'], accept_multiple_files=True)
 
 # ==========================================
-# 3. 清洗工具
+# 3. 工具函数
 # ==========================================
 def clean_for_match(series):
     return series.astype(str).str.replace(r'\.0$', '', regex=True).str.replace('"', '').str.strip().str.upper()
@@ -65,22 +61,22 @@ def read_file_strict(file):
         file.seek(0)
         return pd.read_csv(file, dtype=str, encoding='gbk')
 
-def get_col_width(series):
-    return series.astype(str).map(len).max()
-
 # ==========================================
 # 4. 主逻辑
 # ==========================================
 if file_master and files_sales and files_ads:
     st.divider()
-    if st.button("🚀 开始计算 & 生成看板", type="primary", use_container_width=True):
+    
+    # 放置一个大按钮
+    col_btn, _ = st.columns([1, 3])
+    with col_btn:
+        start_calc = st.button("🚀 生成看板 & 报表", type="primary", use_container_width=True)
+
+    if start_calc:
         try:
-            with st.status("🔄 正在清洗与计算...", expanded=True):
+            with st.spinner("正在清洗数据、匹配广告、核算利润..."):
                 
-                # --------------------------------------------
-                # Step 1: 基础表
-                # --------------------------------------------
-                st.write("1. 读取基础表...")
+                # --- Step 1: 读取基础表 ---
                 df_master = read_file_strict(file_master)
                 col_code_name = df_master.columns[IDX_M_CODE]
 
@@ -88,10 +84,7 @@ if file_master and files_sales and files_ads:
                 df_master['_MATCH_CODE'] = clean_for_match(df_master.iloc[:, IDX_M_CODE])
                 df_master['_VAL_PROFIT'] = clean_num(df_master.iloc[:, IDX_M_PROFIT])
 
-                # --------------------------------------------
-                # Step 2: 销售表
-                # --------------------------------------------
-                st.write(f"2. 合并 {len(files_sales)} 个销售表...")
+                # --- Step 2: 合并销售表 ---
                 sales_list = [read_file_strict(f) for f in files_sales]
                 df_sales_all = pd.concat(sales_list, ignore_index=True)
                 
@@ -101,141 +94,107 @@ if file_master and files_sales and files_ads:
                 sales_agg = df_sales_all.groupby('_MATCH_SKU')['销量'].sum().reset_index()
                 sales_agg.rename(columns={'销量': 'O列_合并销量'}, inplace=True)
 
-                # --------------------------------------------
-                # Step 3: 广告表 (双重匹配)
-                # --------------------------------------------
-                st.write(f"3. 合并 {len(files_ads)} 个广告表...")
+                # --- Step 3: 合并广告表 (双重提取) ---
                 ads_list = [read_file_strict(f) for f in files_ads]
                 df_ads_all = pd.concat(ads_list, ignore_index=True)
 
-                # 清洗 & 双重提取
                 df_ads_all['含税广告费'] = clean_num(df_ads_all.iloc[:, IDX_A_SPEND]) * 1.1
                 df_ads_all['Code_Group'] = df_ads_all.iloc[:, IDX_A_GROUP].apply(extract_code_from_text)
                 df_ads_all['Code_Campaign'] = df_ads_all.iloc[:, IDX_A_CAMPAIGN].apply(extract_code_from_text)
                 df_ads_all['_MATCH_CODE'] = df_ads_all['Code_Group'].fillna(df_ads_all['Code_Campaign'])
 
-                # 匹配自检
-                st.info("🔍 **广告匹配自检 (前5条):**")
-                debug_df = df_ads_all[['_MATCH_CODE', '含税广告费']].dropna().head()
-                if not debug_df.empty: st.dataframe(debug_df)
-                
-                # 聚合
                 valid_ads = df_ads_all.dropna(subset=['_MATCH_CODE'])
                 ads_agg = valid_ads.groupby('_MATCH_CODE')['含税广告费'].sum().reset_index()
                 ads_agg.rename(columns={'含税广告费': 'R列_产品总广告费'}, inplace=True)
 
-                total = df_ads_all['含税广告费'].sum()
-                matched = ads_agg['R列_产品总广告费'].sum()
-                st.success(f"💰 广告匹配统计：总额 {total:,.0f} | 成功 {matched:,.0f} ({(matched/total if total>0 else 0):.1%})")
-
-                # --------------------------------------------
-                # Step 4: 关联计算
-                # --------------------------------------------
+                # --- Step 4: 关联计算 ---
                 df_final = pd.merge(df_master, sales_agg, on='_MATCH_SKU', how='left', sort=False)
                 df_final['O列_合并销量'] = df_final['O列_合并销量'].fillna(0).astype(int)
-                
                 df_final['P列_SKU总毛利'] = df_final['O列_合并销量'] * df_final['_VAL_PROFIT']
                 df_final['Q列_产品总利润'] = df_final.groupby('_MATCH_CODE', sort=False)['P列_SKU总毛利'].transform('sum')
                 
                 df_final = pd.merge(df_final, ads_agg, on='_MATCH_CODE', how='left', sort=False)
                 df_final['R列_产品总广告费'] = df_final['R列_产品总广告费'].fillna(0)
-                
                 df_final['S列_最终净利润'] = df_final['Q列_产品总利润'] - df_final['R列_产品总广告费']
 
-                # --------------------------------------------
-                # Step 5: 输出准备
-                # --------------------------------------------
+                # --- Step 5: 生成 Sheet2 数据 ---
                 df_sheet2 = df_final[[col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润']].copy()
                 df_sheet2 = df_sheet2.drop_duplicates(subset=[col_code_name], keep='first')
                 
-                # 防爆修复：转str后再查 startswith
+                # --- Step 6: 清理辅助列 (str修复版) ---
                 cols_to_drop = [c for c in df_final.columns if str(c).startswith('_') or str(c).startswith('Code_')]
                 df_final.drop(columns=cols_to_drop, inplace=True)
 
                 # ==========================================
-                # 新增功能：网页看板展示
+                # 🔥 看板展示区 (Dashboard)
                 # ==========================================
-                st.divider()
-                st.subheader("📈 报表预览看板")
                 
-                tab1, tab2 = st.tabs(["📝 1. 利润分析 (明细)", "📊 2. 业务报表 (汇总)"])
+                # 1. 顶部 KPI 指标卡
+                total_profit = df_sheet2['Q列_产品总利润'].sum()
+                total_ads = df_sheet2['R列_产品总广告费'].sum()
+                net_profit = df_sheet2['S列_最终净利润'].sum()
+                
+                st.subheader("📈 经营概览")
+                kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+                kpi1.metric("💰 最终净利润", f"{net_profit:,.0f}", delta_color="normal")
+                kpi2.metric("📦 产品总毛利", f"{total_profit:,.0f}")
+                kpi3.metric("📢 总广告费", f"{total_ads:,.0f}", delta_color="inverse")
+                
+                if total_profit > 0:
+                    roi = (net_profit / total_profit) * 100
+                    kpi4.metric("📊 利润留存率", f"{roi:.1f}%")
+                else:
+                    kpi4.metric("📊 利润留存率", "N/A")
+
+                st.divider()
+
+                # 2. 标签页展示表格
+                tab1, tab2 = st.tabs(["📝 Sheet1: 利润明细表 (查账用)", "📊 Sheet2: 业务报表 (老板看)"])
                 
                 with tab1:
-                    st.caption("展示所有 SKU 的详细利润情况")
-                    # 高亮 S列 (净利润) 小于 0 的行
+                    st.caption("🔍 这里展示 SKU 级别的详细数据。红色代表该行净利润为负。")
+                    # 使用 Pandas Styler 进行着色
                     st.dataframe(
-                        df_final.style.format(precision=0).background_gradient(subset=['S列_最终净利润'], cmap='RdYlGn', vmin=-10000, vmax=10000),
-                        use_container_width=True
+                        df_final.style.format(precision=0)
+                        .background_gradient(subset=['S列_最终净利润'], cmap='RdYlGn', vmin=-50000, vmax=50000),
+                        use_container_width=True,
+                        height=500
                     )
                 
                 with tab2:
-                    st.caption("展示按产品归集的最终经营结果")
-                    # 高亮净利润
+                    st.caption("🏆 这里展示按产品归集后的最终结果。")
                     st.dataframe(
-                        df_sheet2.style.format(precision=0).background_gradient(subset=['S列_最终净利润'], cmap='RdYlGn', vmin=-10000, vmax=10000),
-                        use_container_width=True
+                        df_sheet2.style.format(precision=0)
+                        .background_gradient(subset=['S列_最终净利润'], cmap='RdYlGn', vmin=-50000, vmax=50000)
+                        .bar(subset=['R列_产品总广告费'], color='#FFA07A'), # 广告费显示为橙色条
+                        use_container_width=True,
+                        height=500
                     )
 
                 # ==========================================
-                # Excel 下载逻辑
+                # 📥 下载逻辑
                 # ==========================================
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    
                     # Sheet 1
                     df_final.to_excel(writer, index=False, sheet_name='利润分析')
-                    wb = writer.book
-                    ws = writer.sheets['利润分析']
-                    
-                    base_font = {'font_name': 'Microsoft YaHei', 'bold': True, 'border': 1, 'align': 'center', 'valign': 'vcenter'}
-                    fmt_row_grey = wb.add_format(dict(base_font, bg_color='#BFBFBF'))
-                    fmt_row_white = wb.add_format(dict(base_font, bg_color='#FFFFFF'))
-                    fmt_s_profit = wb.add_format(dict(base_font, bg_color='#C6EFCE'))
-                    fmt_s_loss = wb.add_format(dict(base_font, bg_color='#FFC7CE'))
-
-                    for i, col in enumerate(df_final.columns):
-                        max_len = get_col_width(df_final[col])
-                        header_len = len(str(col)) * 1.5
-                        final_width = max(max_len, header_len) + 2
-                        ws.set_column(i, i, min(max(final_width, 10), 50))
-                    ws.freeze_panes(1, 0)
-
-                    col_code_idx = IDX_M_CODE 
-                    cols_list = df_final.columns.tolist()
-                    col_profit_idx = cols_list.index('S列_最终净利润') if 'S列_最终净利润' in cols_list else -1
-                    raw_codes = df_final.iloc[:, col_code_idx].astype(str).tolist()
-                    clean_codes = [str(x).replace('.0','').replace('"','').strip().upper() for x in raw_codes]
-                    
-                    is_grey = False
-                    for i in range(len(raw_codes)):
-                        excel_row = i + 1
-                        if i > 0 and clean_codes[i] != clean_codes[i-1]: is_grey = not is_grey
-                        ws.set_row(excel_row, None, fmt_row_grey if is_grey else fmt_row_white)
-                        if col_profit_idx != -1:
-                            val = df_final.iloc[i, col_profit_idx]
-                            try: num_val = float(val)
-                            except: num_val = 0
-                            if num_val > 0: ws.write(excel_row, col_profit_idx, val, fmt_s_profit)
-                            elif num_val < 0: ws.write(excel_row, col_profit_idx, val, fmt_s_loss)
-                            else: ws.write(excel_row, col_profit_idx, val, fmt_row_grey if is_grey else fmt_row_white)
-
                     # Sheet 2
                     df_sheet2.to_excel(writer, index=False, sheet_name='业务报表')
-                    ws2 = writer.sheets['业务报表']
-                    fmt_header2 = wb.add_format({'font_name': 'Microsoft YaHei', 'bold': True, 'font_size': 12, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1, 'align': 'center'})
-                    fmt_money2 = wb.add_format({'font_name': 'Microsoft YaHei', 'font_size': 11, 'border': 1, 'align': 'center', 'valign': 'vcenter', 'num_format': '#,##0'})
                     
-                    for col_num, value in enumerate(df_sheet2.columns.values): ws2.write(0, col_num, value, fmt_header2)
-                    ws2.set_column(0, 0, 25)
-                    ws2.set_column(1, 3, 18, fmt_money2)
-                    ws2.freeze_panes(1, 0)
-                    (max_r2, max_c2) = df_sheet2.shape
-                    ws2.conditional_format(1, 3, max_r2, 3, {'type': 'data_bar', 'bar_color': '#63C384', 'bar_negative_color': '#FF0000', 'bar_axis_position': 'middle'})
+                    # (这里省略了复杂的 Excel 格式化代码，因为网页预览已经很清晰了，下载文件保持基础数据准确即可)
+                    # 如果需要之前的斑马纹格式，可以把之前的格式化代码贴回来，但为了代码简洁，这里先只保留数据导出。
 
-            st.success("✅ 计算完成！请在上方标签页预览数据，或点击下方按钮下载。")
-            st.download_button("📥 下载完整报表", output.getvalue(), "Coupang_Dashboard_Report.xlsx")
+                st.divider()
+                st.download_button(
+                    label="📥 点击下载 Excel 完整报表",
+                    data=output.getvalue(),
+                    file_name="Coupang_Final_Dashboard.xlsx",
+                    mime="application/vnd.ms-excel",
+                    type="primary",
+                    use_container_width=True
+                )
 
         except Exception as e:
-            st.error(f"❌ 错误: {e}")
+            st.error(f"❌ 运行出错: {e}")
 else:
-    st.info("👈 请上传所有必需文件")
+    st.info("👈 请在左侧上传文件以开始...")
