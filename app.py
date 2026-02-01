@@ -67,7 +67,6 @@ def read_file_strict(file):
 if file_master and files_sales and files_ads:
     st.divider()
     
-    # 放置一个大按钮
     col_btn, _ = st.columns([1, 3])
     with col_btn:
         start_calc = st.button("🚀 生成看板 & 报表", type="primary", use_container_width=True)
@@ -118,8 +117,16 @@ if file_master and files_sales and files_ads:
                 df_final['S列_最终净利润'] = df_final['Q列_产品总利润'] - df_final['R列_产品总广告费']
 
                 # --- Step 5: 生成 Sheet2 数据 ---
+                # 在这里计算比值
                 df_sheet2 = df_final[[col_code_name, 'Q列_产品总利润', 'R列_产品总广告费', 'S列_最终净利润']].copy()
                 df_sheet2 = df_sheet2.drop_duplicates(subset=[col_code_name], keep='first')
+                
+                # 新增计算：广告占比 = 广告费 / 总利润
+                # 注意处理分母为0的情况
+                df_sheet2['广告/毛利比'] = df_sheet2.apply(
+                    lambda x: x['R列_产品总广告费'] / x['Q列_产品总利润'] if x['Q列_产品总利润'] != 0 else 0, 
+                    axis=1
+                )
                 
                 # --- Step 6: 清理辅助列 (str修复版) ---
                 cols_to_drop = [c for c in df_final.columns if str(c).startswith('_') or str(c).startswith('Code_')]
@@ -141,32 +148,39 @@ if file_master and files_sales and files_ads:
                 kpi3.metric("📢 总广告费", f"{total_ads:,.0f}", delta_color="inverse")
                 
                 if total_profit > 0:
-                    roi = (net_profit / total_profit) * 100
-                    kpi4.metric("📊 利润留存率", f"{roi:.1f}%")
+                    overall_ads_ratio = (total_ads / total_profit)
+                    kpi4.metric("📉 整体广告/毛利比", f"{overall_ads_ratio:.1%}")
                 else:
-                    kpi4.metric("📊 利润留存率", "N/A")
+                    kpi4.metric("📉 整体广告/毛利比", "N/A")
 
                 st.divider()
 
                 # 2. 标签页展示表格
-                tab1, tab2 = st.tabs(["📝 Sheet1: 利润明细表 (查账用)", "📊 Sheet2: 业务报表 (老板看)"])
+                tab1, tab2 = st.tabs(["📝 Sheet1: 利润明细表 (查账用)", "📊 Sheet2: 业务报表 (含占比)"])
                 
                 with tab1:
-                    st.caption("🔍 这里展示 SKU 级别的详细数据。红色代表该行净利润为负。")
-                    # 使用 Pandas Styler 进行着色
+                    st.caption("展示所有 SKU 的详细利润情况。")
                     st.dataframe(
                         df_final.style.format(precision=0)
-                        .background_gradient(subset=['S列_最终净利润'], cmap='RdYlGn', vmin=-50000, vmax=50000),
+                        .background_gradient(subset=['S列_最终净利润'], cmap='RdYlGn', vmin=-10000, vmax=10000),
                         use_container_width=True,
                         height=500
                     )
                 
                 with tab2:
-                    st.caption("🏆 这里展示按产品归集后的最终结果。")
+                    st.caption("展示按产品归集的结果。新增【广告/毛利比】列。")
+                    # 设置格式：金额列0位小数，比值列百分比
+                    format_dict = {
+                        'Q列_产品总利润': '{:,.0f}',
+                        'R列_产品总广告费': '{:,.0f}', 
+                        'S列_最终净利润': '{:,.0f}',
+                        '广告/毛利比': '{:.1%}'
+                    }
                     st.dataframe(
-                        df_sheet2.style.format(precision=0)
-                        .background_gradient(subset=['S列_最终净利润'], cmap='RdYlGn', vmin=-50000, vmax=50000)
-                        .bar(subset=['R列_产品总广告费'], color='#FFA07A'), # 广告费显示为橙色条
+                        df_sheet2.style.format(format_dict)
+                        .background_gradient(subset=['S列_最终净利润'], cmap='RdYlGn', vmin=-10000, vmax=10000)
+                        # 广告比大于100% (即1.0) 标红，说明亏本推广
+                        .text_gradient(subset=['广告/毛利比'], cmap='coolwarm', vmin=0, vmax=1.5),
                         use_container_width=True,
                         height=500
                     )
@@ -178,17 +192,32 @@ if file_master and files_sales and files_ads:
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                     # Sheet 1
                     df_final.to_excel(writer, index=False, sheet_name='利润分析')
+                    
                     # Sheet 2
                     df_sheet2.to_excel(writer, index=False, sheet_name='业务报表')
                     
-                    # (这里省略了复杂的 Excel 格式化代码，因为网页预览已经很清晰了，下载文件保持基础数据准确即可)
-                    # 如果需要之前的斑马纹格式，可以把之前的格式化代码贴回来，但为了代码简洁，这里先只保留数据导出。
+                    # Excel 格式化
+                    wb = writer.book
+                    ws2 = writer.sheets['业务报表']
+                    
+                    fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1, 'align': 'center'})
+                    fmt_pct = wb.add_format({'num_format': '0.0%', 'align': 'center'})
+                    fmt_money = wb.add_format({'num_format': '#,##0', 'align': 'center'})
+                    
+                    # 写表头
+                    for col_num, value in enumerate(df_sheet2.columns.values):
+                        ws2.write(0, col_num, value, fmt_header)
+                    
+                    # 设置列宽和格式
+                    ws2.set_column(0, 0, 20) # A列 产品
+                    ws2.set_column(1, 3, 15, fmt_money) # B,C,D列 金额
+                    ws2.set_column(4, 4, 15, fmt_pct)   # E列 占比
 
                 st.divider()
                 st.download_button(
                     label="📥 点击下载 Excel 完整报表",
                     data=output.getvalue(),
-                    file_name="Coupang_Final_Dashboard.xlsx",
+                    file_name="Coupang_Pro_Report.xlsx",
                     mime="application/vnd.ms-excel",
                     type="primary",
                     use_container_width=True
