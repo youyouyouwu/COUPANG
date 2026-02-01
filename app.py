@@ -7,7 +7,7 @@ import re
 # 1. 页面配置 (宽屏)
 # ==========================================
 st.set_page_config(layout="wide", page_title="Coupang 经营看板 Pro (最终版)")
-st.title("📊 Coupang 经营分析看板 (全功能·样式规范版)")
+st.title("📊 Coupang 经营分析看板 (全功能·稳定版)")
 
 # --- 列号配置 ---
 # Master表 (基础表)
@@ -267,31 +267,35 @@ if file_master and files_sales and files_ads:
 
                     tab1, tab2, tab3 = st.tabs(["📝 1. 利润分析", "📊 2. 业务报表", "🏭 3. 库存分析"])
                     
-                    # 定义统一的格式化字典
+                    # 定义格式：安全函数 (修复 Unknown format code '%' error)
+                    def safe_pct(x):
+                        try:
+                            # 尝试转浮点再格式化
+                            return "{:.1%}".format(float(x))
+                        except:
+                            # 失败则返回原值(如是文字)
+                            return str(x)
+
                     fmt_money_int = "{:,.0f}"
-                    fmt_pct = "{:.1%}"
                     
                     # 动态生成格式化规则
                     def get_format_dict(df):
                         format_dict = {}
                         for col in df.columns:
                             c_str = str(col)
-                            # 利润、费用、货值、金额 -> 整数
                             if any(x in c_str for x in ['利润', '费用', '货值', '金额', '毛利']):
                                 if '率' not in c_str and '比' not in c_str:
                                     format_dict[col] = fmt_money_int
-                            # 销量、库存、数量 -> 整数
-                            elif any(x in c_str for x in ['销量', '库存', '数量', '标准']):
+                            elif any(x in c_str for x in ['销量', '库存', '数量', '标准', '待补']):
                                 if '比' not in c_str:
                                     format_dict[col] = fmt_money_int
-                            # 比、率、占比 -> 百分比
                             elif any(x in c_str for x in ['比', '率', '占比']):
-                                format_dict[col] = fmt_pct
+                                # 使用安全百分比函数，而不是直接字符串
+                                format_dict[col] = safe_pct
                         return format_dict
 
                     def apply_visual_style(df, cols_to_color, is_sheet2=False):
                         try:
-                            # 应用自动格式化
                             styler = df.style.format(get_format_dict(df))
                             
                             def zebra_rows(x):
@@ -346,11 +350,11 @@ if file_master and files_sales and files_ads:
                         except: return df
 
                     with tab1:
-                        st.caption("利润明细 (Sheet1) - 金额取整，比率百分比")
+                        st.caption("利润明细 (Sheet1)")
                         st.dataframe(apply_visual_style(df_final, ['S列_最终净利润']), use_container_width=True, height=600)
                     
                     with tab2:
-                        st.caption("业务汇总 (Sheet2) - 格式已统一规范")
+                        st.caption("业务汇总 (Sheet2)")
                         st.dataframe(apply_visual_style(df_sheet2, ['S列_最终净利润'], is_sheet2=True), use_container_width=True, height=600)
                     
                     with tab3:
@@ -376,9 +380,7 @@ if file_master and files_sales and files_ads:
                         wb = writer.book
                         fmt_header = wb.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1, 'align': 'center'})
                         
-                        # 核心格式：整数金额/数量
                         fmt_int = wb.add_format({'num_format': '#,##0', 'align': 'center'})
-                        # 核心格式：百分比
                         fmt_pct = wb.add_format({'num_format': '0.0%', 'align': 'center'})
                         
                         # 斑马纹
@@ -386,45 +388,33 @@ if file_master and files_sales and files_ads:
                         fmt_grey = wb.add_format(dict(base_font, bg_color='#BFBFBF'))
                         fmt_white = wb.add_format(dict(base_font, bg_color='#FFFFFF'))
 
-                        # 通用列宽与格式设置函数
                         def set_sheet_format(sheet_name, df_obj, group_col_idx):
                             ws = writer.sheets[sheet_name]
-                            
-                            # 1. 自动列宽 & 斑马纹
                             raw_codes = df_obj.iloc[:, group_col_idx].astype(str).tolist()
                             clean_codes = [str(x).replace('.0','').replace('"','').strip().upper() for x in raw_codes]
                             is_grey = False
-                            
                             for i in range(len(raw_codes)):
                                 if i > 0 and clean_codes[i] != clean_codes[i-1]:
                                     is_grey = not is_grey
                                 ws.set_row(i + 1, None, fmt_grey if is_grey else fmt_white)
 
-                            # 2. 智能设置列格式 (金额/比率)
                             for i, col in enumerate(df_obj.columns):
                                 c_str = str(col)
-                                width = 12 # 默认宽度
+                                width = 12
                                 cell_fmt = None
-                                
-                                # 规则匹配
                                 if any(x in c_str for x in ['利润', '费用', '货值', '金额', '毛利', '销量', '库存', '数量', '标准', '待补']):
                                     if '率' not in c_str and '比' not in c_str:
-                                        cell_fmt = fmt_int # 整数
+                                        cell_fmt = fmt_int
                                         width = 15
                                 elif any(x in c_str for x in ['比', '率', '占比']):
-                                    cell_fmt = fmt_pct # 百分比
+                                    cell_fmt = fmt_pct
                                     width = 12
-                                
-                                # 设置列宽和格式
                                 if cell_fmt:
                                     ws.set_column(i, i, width, cell_fmt)
                                 else:
-                                    ws.set_column(i, i, width) # 仅设置宽度
-                                    
-                                # 写表头
+                                    ws.set_column(i, i, width)
                                 ws.write(0, i, col, fmt_header)
 
-                        # 应用到所有 Sheet
                         set_sheet_format('利润分析', df_final, IDX_M_CODE)
                         set_sheet_format('业务报表', df_sheet2, IDX_M_CODE)
                         set_sheet_format('库存分析', df_sheet3, IDX_M_CODE)
@@ -435,7 +425,7 @@ if file_master and files_sales and files_ads:
                     st.download_button(
                         label="📥 下载 Excel (含利润/业务/库存 3个Sheet)",
                         data=output.getvalue(),
-                        file_name=f"Coupang_Report_Final_{filter_code if filter_code else 'All'}.xlsx",
+                        file_name=f"Coupang_Report_Stable_{filter_code if filter_code else 'All'}.xlsx",
                         mime="application/vnd.ms-excel",
                         type="primary",
                         use_container_width=True
