@@ -12,6 +12,7 @@ st.title("📊 Coupang 经营分析看板 (全功能·稳定版)")
 # --- 列号配置 ---
 # Master表 (基础表)
 IDX_M_CODE   = 0    # A列: 内部编码
+IDX_M_GROUP  = 1    # B列: 产品编号 (利润分析斑马纹分组用)
 IDX_M_SKU    = 3    # D列: SKU ID (用于匹配火箭仓)
 IDX_M_COST   = 6    # G列: 采购价格 (RMB)
 IDX_M_PROFIT = 10   # K列: 单品毛利
@@ -415,7 +416,7 @@ if file_master and files_sales and files_ads:
                                     ws.set_column(i, i, width)
                                 ws.write(0, i, col, fmt_header)
 
-                        set_sheet_format('利润分析', df_final, IDX_M_CODE)
+                        set_sheet_format('利润分析', df_final, IDX_M_GROUP)
                         set_sheet_format('业务报表', df_sheet2, IDX_M_CODE)
                         set_sheet_format('库存分析', df_sheet3, IDX_M_CODE)
 
