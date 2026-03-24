@@ -387,32 +387,17 @@ if file_master and files_sales and files_ads:
                         base_font = {'font_name': 'Microsoft YaHei', 'bold': True, 'border': 1, 'align': 'center', 'valign': 'vcenter'}
                         fmt_grey = wb.add_format(dict(base_font, bg_color='#BFBFBF'))
                         fmt_white = wb.add_format(dict(base_font, bg_color='#FFFFFF'))
+                        # 给 Sheet2 的百分比列单独准备“带底色的百分比格式”，避免被整行格式覆盖后显示成小数
+                        fmt_grey_pct = wb.add_format(dict(base_font, bg_color='#BFBFBF', num_format='0.0%'))
+                        fmt_white_pct = wb.add_format(dict(base_font, bg_color='#FFFFFF', num_format='0.0%'))
 
-                        def _normalize_group_value(x):
-                            return str(x).replace('.0', '').replace('"', '').replace("'", '').strip().upper()
-
-                        def get_profit_sheet_group_series(df_obj):
-                            preferred_cols = ['产品编号', '产品编码', '内部编码', '货号', '编码']
-                            for col_name in preferred_cols:
-                                if col_name in df_obj.columns:
-                                    return df_obj[col_name]
-                            # 利润分析默认退回第2列(B列)；如果不存在，再退回第1列(A列)
-                            return df_obj.iloc[:, 1] if df_obj.shape[1] > 1 else df_obj.iloc[:, 0]
-
-                        def set_sheet_format(sheet_name, df_obj, group_source):
+                        def set_sheet_format(sheet_name, df_obj, group_col_idx):
                             ws = writer.sheets[sheet_name]
-
-                            if isinstance(group_source, str) and group_source in df_obj.columns:
-                                raw_groups = df_obj[group_source].astype(str).tolist()
-                            elif isinstance(group_source, int):
-                                raw_groups = df_obj.iloc[:, group_source].astype(str).tolist()
-                            else:
-                                raw_groups = pd.Series(group_source).astype(str).tolist()
-
-                            clean_groups = [_normalize_group_value(x) for x in raw_groups]
+                            raw_codes = df_obj.iloc[:, group_col_idx].astype(str).tolist()
+                            clean_codes = [str(x).replace('.0','').replace('"','').strip().upper() for x in raw_codes]
                             is_grey = False
-                            for i in range(len(clean_groups)):
-                                if i > 0 and clean_groups[i] != clean_groups[i - 1]:
+                            for i in range(len(raw_codes)):
+                                if i > 0 and clean_codes[i] != clean_codes[i-1]:
                                     is_grey = not is_grey
                                 ws.set_row(i + 1, None, fmt_grey if is_grey else fmt_white)
 
@@ -433,10 +418,27 @@ if file_master and files_sales and files_ads:
                                     ws.set_column(i, i, width)
                                 ws.write(0, i, col, fmt_header)
 
-                        # 利润分析：明确按“产品编号”分组着色，不再依赖 A/B 列位置是否变化
-                        set_sheet_format('利润分析', df_final, get_profit_sheet_group_series(df_final))
+                        set_sheet_format('利润分析', df_final, IDX_M_CODE)
                         set_sheet_format('业务报表', df_sheet2, IDX_M_CODE)
                         set_sheet_format('库存分析', df_sheet3, IDX_M_CODE)
+
+                        # 强制把 Sheet2 的“广告费占比/广告毛利比”列按百分比格式写回，避免出现部分单元格显示成小数
+                        ws_sheet2 = writer.sheets['业务报表']
+                        pct_col_candidates = ['广告费占比', '广告/毛利比']
+                        pct_col_name = next((c for c in pct_col_candidates if c in df_sheet2.columns), None)
+                        if pct_col_name is not None:
+                            pct_col_idx = df_sheet2.columns.get_loc(pct_col_name)
+                            raw_codes = df_sheet2.iloc[:, 0].astype(str).tolist()
+                            clean_codes = [str(x).replace('.0','').replace('"','').strip().upper() for x in raw_codes]
+                            is_grey = False
+                            for row_idx, val in enumerate(df_sheet2[pct_col_name].tolist(), start=1):
+                                if row_idx > 1 and clean_codes[row_idx - 1] != clean_codes[row_idx - 2]:
+                                    is_grey = not is_grey
+                                cell_fmt = fmt_grey_pct if is_grey else fmt_white_pct
+                                try:
+                                    ws_sheet2.write_number(row_idx, pct_col_idx, float(val), cell_fmt)
+                                except:
+                                    ws_sheet2.write(row_idx, pct_col_idx, val, cell_fmt)
 
                     st.divider()
                     st.success(f"✅ 报表生成完毕！{' (已应用筛选: ' + filter_code + ')' if filter_code else ''}")
