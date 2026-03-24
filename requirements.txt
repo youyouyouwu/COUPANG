@@ -3,3 +3,4 @@ pandas
 openpyxl
 xlsxwriter
 matplotlib
+matplotlib>=3.0
